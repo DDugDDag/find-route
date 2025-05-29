@@ -17,10 +17,10 @@ class DaejeonBikeAPI:
     """
     def __init__(self):
         # API 키 설정
-        self.api_key = "JuyFVsOLXJrw0gcT9TQdLPhCjdDgUCxJXFLRBs8H3nrA8uUVv574SW2++PESxGhK25E4ekOXCeYZ+hZ7OqVcXA=="
+        self.api_key = ""
         
         # URL에 사용하기 위해 인코딩된 API 키
-        self.encoded_api_key = "JuyFVsOLXJrw0gcT9TQdLPhCjdDgUCxJXFLRBs8H3nrA8uUVv574SW2%2B%2BPESxGhK25E4ekOXCeYZ%2BhZ7OqVcXA%3D%3D"
+        self.encoded_api_key = ""
         
         # API 기본 URL
         self.base_url = "https://apis.data.go.kr/6300000/BicycleRoadService/"
