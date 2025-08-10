@@ -1,4 +1,5 @@
 import heapq
+from heapq import heappop, heappush
 import requests
 import json
 from dataclasses import dataclass
@@ -39,12 +40,27 @@ class Graph:
         self.arcs: Dict[Tuple[int, int], Arc] = {}
         self.lower_triangles: Dict[Tuple[int, int], List[Triangle]] = {}
         self.intermediate_triangles: List[Triangle] = []
+        # 성능 최적화를 위한 인접 리스트
+        self.outgoing_arcs: Dict[int, List[Arc]] = {}  # 정점 -> 나가는 간선들
+        self.incoming_arcs: Dict[int, List[Arc]] = {}  # 정점 -> 들어오는 간선들
     
     def add_vertex(self, vertex: Vertex) -> None:
         self.vertices[vertex.id] = vertex
     
     def add_arc(self, arc: Arc) -> None:
         self.arcs[(arc.source.id, arc.target.id)] = arc
+        
+        # 인접 리스트 업데이트
+        source_id = arc.source.id
+        target_id = arc.target.id
+        
+        if source_id not in self.outgoing_arcs:
+            self.outgoing_arcs[source_id] = []
+        self.outgoing_arcs[source_id].append(arc)
+        
+        if target_id not in self.incoming_arcs:
+            self.incoming_arcs[target_id] = []
+        self.incoming_arcs[target_id].append(arc)
     
     def add_edge(self, v1: Vertex, v2: Vertex, cost: int = 0) -> None:
         arc = Arc(v1, v2, cost)
@@ -237,6 +253,178 @@ class CustomizableContractionHierarchies:
         # 최적 경로가 있으면 재귀적으로 경로 풀어내기
         self.unpack_path(best_triangle.from_side_arc, result_path, metric_function)
         self.unpack_path(best_triangle.to_side_arc, result_path, metric_function)
+    
+    def find_path(self, graph: Graph, source_id: int, target_id: int, metric_function=None) -> List[Arc]:
+        """
+        두 정점 간의 최단 경로를 찾습니다.
+        최적화된 양방향 다익스트라 검색과 CCH 축약 계층 구조를 활용합니다.
+        
+        Args:
+            graph: 그래프 객체
+            source_id: 시작 정점 ID
+            target_id: 도착 정점 ID
+            
+        Returns:
+            최단 경로(Arc 리스트). 경로가 없으면 빈 리스트를 반환합니다.
+        """
+        # 시작 정점과 도착 정점이 같으면 빈 경로 반환
+        if source_id == target_id:
+            return []
+            
+        # 시작 정점과 도착 정점이 그래프에 존재하는지 확인
+        source = graph.vertices.get(source_id)
+        target = graph.vertices.get(target_id)
+        if not source or not target:
+            return []
+            
+        # 직접 간선이 있는지 확인
+        direct_arc = graph.arcs.get((source_id, target_id))
+        if direct_arc:
+            result_path = []
+            self.unpack_path(direct_arc, result_path, metric_function)
+            return result_path
+        
+        # 양방향 다익스트라 검색 초기화
+        forward_distances = {source_id: 0.0}
+        backward_distances = {target_id: 0.0}
+        
+        forward_queue = [(0.0, source_id)]  # (distance, vertex_id)
+        backward_queue = [(0.0, target_id)]
+        
+        forward_settled = set()
+        backward_settled = set()
+        
+        forward_parents = {}
+        backward_parents = {}
+        
+        meeting_point = None
+        best_distance = float('inf')
+        
+        max_iterations = 500  # 최적화: 반복 횟수 제한 감소
+        iteration = 0
+        
+        # 최적화된 양방향 탐색
+        while forward_queue and backward_queue and best_distance == float('inf') and iteration < max_iterations:
+            iteration += 1
+            
+            # 순방향 탐색 단계
+            if forward_queue:
+                _, current_id = heappop(forward_queue)
+                
+                if current_id in forward_settled:
+                    continue
+                    
+                forward_settled.add(current_id)
+                current_dist = forward_distances[current_id]
+                
+                # 만약 현재 정점이 backward_settled에 있다면 만남 정점 후보
+                if current_id in backward_settled:
+                    total_dist = current_dist + backward_distances[current_id]
+                    if total_dist < best_distance:
+                        best_distance = total_dist
+                        meeting_point = current_id
+                        print(f"[DEBUG] 만남 정점 발견: {meeting_point}, 거리: {best_distance}")
+                
+                # 현재 정점의 모든 이웃 정점 탐색
+                current = graph.vertices.get(current_id)
+                if not current:
+                    continue
+                
+                # 최적화: 인접 리스트를 사용해서 O(1) 접근
+                outgoing_arcs = graph.outgoing_arcs.get(current_id, [])
+                
+                for arc in outgoing_arcs:
+                    neighbor_id = arc.target.id
+                    neighbor = graph.vertices.get(neighbor_id)
+                    
+                    # CCH 랭크 조건 완화: 순방향 검색에서도 모든 이웃 정점을 고려
+                    if neighbor:
+                        new_dist = current_dist + arc.cost
+                        if neighbor_id not in forward_distances or new_dist < forward_distances[neighbor_id]:
+                            forward_distances[neighbor_id] = new_dist
+                            heappush(forward_queue, (new_dist, neighbor_id))
+                            forward_parents[neighbor_id] = (current_id, arc)
+            
+            # 역방향 탐색 단계
+            if backward_queue:
+                _, current_id = heappop(backward_queue)
+                
+                if current_id in backward_settled:
+                    continue
+                    
+                backward_settled.add(current_id)
+                current_dist = backward_distances[current_id]
+                
+                # 만남 지점 확인
+                if current_id in forward_settled:
+                    total_dist = forward_distances[current_id] + current_dist
+                    if total_dist < best_distance:
+                        best_distance = total_dist
+                        meeting_point = current_id
+                
+                # 최적화: 인접 리스트를 사용해서 O(1) 접근
+                incoming_arcs = graph.incoming_arcs.get(current_id, [])
+                
+                for arc in incoming_arcs:
+                    neighbor_id = arc.source.id
+                    neighbor = graph.vertices.get(neighbor_id)
+                    
+                    # CCH 랭크 조건 완화: 역방향 검색에서는 모든 이웃 정점을 고려
+                    if neighbor:
+                        new_dist = current_dist + arc.cost
+                        if neighbor_id not in backward_distances or new_dist < backward_distances[neighbor_id]:
+                            backward_distances[neighbor_id] = new_dist
+                            heappush(backward_queue, (new_dist, neighbor_id))
+                            backward_parents[neighbor_id] = (current_id, arc)
+                
+
+        
+        # 경로가 없는 경우
+        if best_distance == float('inf') or not meeting_point:
+            print(f"[DEBUG] CCH find_path: 경로를 찾을 수 없음 (반복 {iteration})")
+            if iteration >= max_iterations:
+                print(f"[DEBUG] 최대 반복 횟수({max_iterations}) 도달")
+            return []
+        
+        print(f"[DEBUG] 최종 만남 정점: {meeting_point}, 총 거리: {best_distance}")
+        
+        # 경로 재구성
+        path = []
+        
+        # 순방향 경로 재구성
+        print(f"[DEBUG] 순방향 경로 재구성 시작")
+        current = meeting_point
+        forward_arcs = []
+        while current in forward_parents:
+            parent_id, arc = forward_parents[current]
+            print(f"[DEBUG] 순방향 경로: {parent_id} -> {current}")
+            forward_arcs.append(arc)
+            current = parent_id
+            
+        # 순방향 경로 역순으로 경로에 추가
+        for arc in reversed(forward_arcs):
+            sub_path = []
+            self.unpack_path(arc, sub_path, metric_function)
+            path.extend(sub_path)
+        
+        # 역방향 경로 재구성
+        print(f"[DEBUG] 역방향 경로 재구성 시작")
+        current = meeting_point
+        backward_arcs = []
+        while current in backward_parents:
+            parent_id, arc = backward_parents[current]
+            print(f"[DEBUG] 역방향 경로: {current} -> {parent_id}")
+            backward_arcs.append(arc)
+            current = parent_id
+        
+        # 역방향 경로 추가
+        for arc in backward_arcs:
+            sub_path = []
+            self.unpack_path(arc, sub_path, metric_function)
+            path.extend(sub_path)
+        
+        print(f"[DEBUG] 최종 경로 길이: {len(path)}개 간선")
+        return path
         
 # 메인 함수 실행 코드
 if __name__ == "__main__":
