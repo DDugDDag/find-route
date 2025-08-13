@@ -10,6 +10,14 @@ from dotenv import load_dotenv
 # 환경 변수 로드
 load_dotenv()
 
+# 대전광역시 경계 상수
+DAEJEON_BBOX = {
+    'min_lat': 36.2,
+    'max_lat': 36.5,
+    'min_lon': 127.3,
+    'max_lon': 127.5
+}
+
 @dataclass
 class ScenicPoint:
     """경치 좋은 지점을 나타내는 클래스"""
@@ -98,6 +106,11 @@ class ScenicRouteEngine:
         # API 키 상태 확인
         self._check_api_keys()
         
+    def _is_within_daejeon(self, lat: float, lon: float) -> bool:
+        """대전시 경계 내 좌표인지 확인"""
+        return (DAEJEON_BBOX['min_lat'] <= lat <= DAEJEON_BBOX['max_lat'] and
+                DAEJEON_BBOX['min_lon'] <= lon <= DAEJEON_BBOX['max_lon'])
+        
     def _check_api_keys(self) -> None:
         """API 키 설정 상태 확인"""
         print("🔑 API 키 상태 확인:")
@@ -139,6 +152,13 @@ class ScenicRouteEngine:
                 category_count = 0
                 
                 for place in places:
+                    # 대전시 경계 내 좌표인지 확인
+                    place_lat = float(place.get('y', 0))
+                    place_lon = float(place.get('x', 0))
+                    
+                    if not self._is_within_daejeon(place_lat, place_lon):
+                        continue  # 대전시 외부 장소는 제외
+                    
                     # 중복 체크 (같은 이름과 비슷한 위치)
                     is_duplicate = False
                     for existing_point in self.scenic_points.values():
@@ -381,6 +401,10 @@ class ScenicRouteEngine:
         for dlat, dlon in directions:
             neighbor_lat = current.lat + dlat
             neighbor_lon = current.lon + dlon
+            
+            # 대전시 경계 내에 있는 노드만 추가
+            if not self._is_within_daejeon(neighbor_lat, neighbor_lon):
+                continue
             
             neighbor = RouteNode(
                 id=len(self.node_cache),
